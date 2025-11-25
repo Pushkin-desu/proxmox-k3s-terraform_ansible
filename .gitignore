@@ -1,2 +1,3 @@
 kubectl
 .env
+kubeconfig-*.yaml
