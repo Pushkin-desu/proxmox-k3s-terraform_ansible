@@ -1,4 +1,4 @@
-# K3s Mini Cluster in Proxmox: Terraform + Ansible Deploy
+# HOMELab K3s Mini Cluster in Proxmox: Terraform + Ansible Deploy
 
 ## Требования
 - Proxmox VE 8 и выше
