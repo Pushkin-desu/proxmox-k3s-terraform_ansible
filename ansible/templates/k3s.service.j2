@@ -1,0 +1,16 @@
+[Unit]
+Description=Lightweight Kubernetes (k3s) server
+Documentation=https://k3s.io
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/k3s server {{ k3s_server_args | join(' ') }}
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

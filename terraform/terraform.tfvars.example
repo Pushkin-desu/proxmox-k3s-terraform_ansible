@@ -1,0 +1,71 @@
+# Proxmox API
+proxmox_api_url        = "https://pve.local:8006/api2/json"
+proxmox_api_token_id   = "root@pam!terraform"
+proxmox_api_token_secret = "your_secret_token"
+
+# Шаблон (cloud-init) VM
+template_vm_id         = 9000
+
+# Сеть / Хранилище
+datastore       = "local-lvm"
+network_bridge  = "vmbr0"
+network_gateway = "192.168.1.1"
+vlan_id = 0
+disk_size_gb = 20
+
+# SSH ключ
+ssh_public_key         = ""
+ssh_user = "user"
+
+cluster_nodes = [
+  {
+    name        = "k3s-master-1"
+    vmid        = 4010
+    target_node = "pve"
+    cores       = 2
+    memory      = 4096
+    ip          = "192.168.1.60/24"
+    role        = "master"
+    datastore   = "" 
+  },
+  {
+    name        = "k3s-master-2"
+    vmid        = 4011
+    target_node = "pve"
+    cores       = 2
+    memory      = 4096
+    ip          = "192.168.1.61/24"
+    role        = "master"
+    datastore   = "" 
+  },
+  {
+    name        = "k3s-worker-1"
+    vmid        = 4020
+    target_node = "pve"
+    cores       = 2
+    memory      = 4096
+    ip          = "192.168.1.62/24"
+    role        = "worker"
+    datastore   = "" 
+  },
+  {
+    name        = "k3s-worker-2"
+    vmid        = 4021
+    target_node = "pve"
+    cores       = 2
+    memory      = 4096
+    ip          = "192.168.1.63/24"
+    role        = "worker"
+    datastore   = "" 
+  },
+  {
+    name        = "k3s-worker-3"
+    vmid        = 4022
+    target_node = "pve"
+    cores       = 2
+    memory      = 4096
+    ip          = "192.168.1.64/24"
+    role        = "worker"
+    datastore   = "" 
+  }
+]

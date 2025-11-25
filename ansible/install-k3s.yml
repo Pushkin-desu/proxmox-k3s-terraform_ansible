@@ -1,0 +1,187 @@
+- name: Prepare all nodes (masters + workers)
+  hosts: k3s_masters:k3s_workers
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Install base packages
+      apt:
+        name:
+          - curl
+          - ca-certificates
+          - gnupg
+          - lsb-release
+          - net-tools
+        state: present
+        update_cache: yes
+
+    - name: Disable swap runtime
+      command: swapoff -a
+      when: ansible_swaptotal_mb|int > 0
+
+    - name: Comment swap in fstab
+      replace:
+        path: /etc/fstab
+        regexp: '^(.*\sswap\s.*)$'
+        replace: '# \1'
+
+    - name: Load kernel modules
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      loop: [overlay, br_netfilter]
+
+    - name: Persist modules on reboot
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        mode: '0644'
+        content: |
+          overlay
+          br_netfilter
+
+    - name: Sysctl params for k8s
+      copy:
+        dest: /etc/sysctl.d/99-k8s.conf
+        mode: '0644'
+        content: |
+          net.bridge.bridge-nf-call-iptables = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward = 1
+
+    - name: Apply sysctl
+      command: sysctl --system
+
+- name: Install / start k3s servers (masters)
+  hosts: k3s_masters
+  become: true
+  vars:
+    k3s_bin_path: /usr/local/bin/k3s
+  tasks:
+    - name: Download k3s binary
+      get_url:
+        url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version }}/k3s"
+        dest: "{{ k3s_bin_path }}"
+        mode: '0755'
+
+    - name: Check if node-token exists (already initialized)
+      stat:
+        path: /var/lib/rancher/k3s/server/node-token
+      register: node_token_file
+
+    - name: Cluster init on FIRST master (only if not initialized)
+      command: >
+        /usr/local/bin/k3s server
+        {{ k3s_server_args | join(' ') }}
+        --cluster-init
+      when: inventory_hostname == groups['k3s_masters'][0] and not node_token_file.stat.exists
+
+    - name: Join other masters (only if not initialized)
+      command: >
+        /usr/local/bin/k3s server
+        {{ k3s_server_args | join(' ') }}
+        --server https://{{ hostvars[groups['k3s_masters'][0]].k3s_master_ip }}:6443
+        --token {{ hostvars[groups['k3s_masters'][0]].node_token }}
+      when: inventory_hostname != groups['k3s_masters'][0] and not node_token_file.stat.exists and hostvars[groups['k3s_masters'][0]].node_token is defined
+
+    - name: Create systemd unit (idempotent server)
+      copy:
+        dest: /etc/systemd/system/k3s.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Lightweight Kubernetes (k3s) server
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          Type=notify
+          ExecStart=/usr/local/bin/k3s server {{ k3s_server_args | join(' ') }}
+          Restart=always
+          LimitNOFILE=1048576
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: systemd reload
+      systemd:
+        daemon_reload: true
+
+    - name: Ensure k3s server running
+      systemd:
+        name: k3s
+        state: started
+        enabled: true
+
+    - name: Wait API (first master only)
+      wait_for:
+        host: "{{ k3s_master_ip }}"
+        port: 6443
+        timeout: 300
+      when: inventory_hostname == groups['k3s_masters'][0]
+
+    - name: Read node-token
+      command: cat /var/lib/rancher/k3s/server/node-token
+      register: ntok
+      changed_when: false
+
+    - name: Set node_token fact
+      set_fact:
+        node_token: "{{ ntok.stdout }}"
+
+    - name: Read kubeconfig (first master only)
+      command: cat /etc/rancher/k3s/k3s.yaml
+      register: kube_cfg
+      changed_when: false
+      when: inventory_hostname == groups['k3s_masters'][0]
+
+    - name: Replace localhost with k3s_master_ip
+      set_fact:
+        kubeconfig_content: "{{ kube_cfg.stdout | replace('127.0.0.1', k3s_master_ip) }}"
+      when: inventory_hostname == groups['k3s_masters'][0]
+
+    - name: Save kubeconfig locally
+      copy:
+        content: "{{ kubeconfig_content }}"
+        dest: "./kubeconfig-master.yaml"
+        mode: '0644'
+      delegate_to: localhost
+      when: inventory_hostname == groups['k3s_masters'][0]
+      become: false
+
+- name: Install / start k3s agents (workers)
+  hosts: k3s_workers
+  become: true
+  vars:
+    k3s_bin_path: /usr/local/bin/k3s
+  tasks:
+    - name: Download k3s binary
+      get_url:
+        url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version }}/k3s"
+        dest: "{{ k3s_bin_path }}"
+        mode: '0755'
+
+    - name: Create systemd unit for agent
+      copy:
+        dest: /etc/systemd/system/k3s-agent.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Lightweight Kubernetes (k3s) agent
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          Type=exec
+          Environment="K3S_URL=https://{{ hostvars[groups['k3s_masters'][0]].k3s_master_ip }}:6443"
+          Environment="K3S_TOKEN={{ hostvars[groups['k3s_masters'][0]].node_token }}"
+          ExecStart=/usr/local/bin/k3s agent {{ k3s_agent_args | join(' ') }}
+          Restart=always
+          LimitNOFILE=1048576
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: systemd reload
+      systemd:
+        daemon_reload: true
+
+    - name: Ensure k3s-agent started
+      systemd:
+        name: k3s-agent
+        state: started
+        enabled: true
