@@ -316,7 +316,6 @@ kubectl get pods -A
 
 ## TODO
 
-- Дополнить автодобавление ansible inventory на основе terraform outputs.
 - Протестировать пайплайн push→build→deploy (Jenkins/GitHub Actions).
 - Миграция на GitOps (ArgoCD) и хранение helm values в отдельном репозитории.
 - Пример секции secrets‑management.
