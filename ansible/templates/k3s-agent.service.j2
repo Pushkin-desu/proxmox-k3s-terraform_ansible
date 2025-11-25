@@ -1,18 +1,16 @@
 [Unit]
 Description=Lightweight Kubernetes (k3s) agent
-Documentation=https://k3s.io
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=exec
-Environment="K3S_URL=https://{{ k3s_master_ip }}:6443"
+Environment="K3S_URL={{ k3s_url }}"
 Environment="K3S_TOKEN={{ k3s_token }}"
 ExecStart=/usr/local/bin/k3s agent {{ k3s_agent_args | join(' ') }}
-KillMode=process
-Delegate=yes
-LimitNOFILE=1048576
 Restart=always
+RestartSec=5s
+LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target

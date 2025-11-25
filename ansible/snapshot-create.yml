@@ -1,0 +1,154 @@
+- name: Build VM metadata (run on localhost, but inventory must be loaded)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    request_timeout: 180
+  tasks:
+    - name: Set snapshot params if missing
+      set_fact:
+        snapshot_description: "{{ snapshot_description | default('Manual snapshot via Ansible') }}"
+        include_ram: "{{ include_ram | default(false) }}"
+
+    - name: Validate required environment vars
+      fail:
+        msg: "Нужно: PROXMOX_API_HOST / PROXMOX_API_TOKEN_ID / PROXMOX_API_TOKEN_SECRET экспортированы и -e snapshot_name=..."
+      when:
+        - (lookup('env','PROXMOX_API_TOKEN_ID') | length) == 0
+        - (lookup('env','PROXMOX_API_TOKEN_SECRET') | length) == 0
+        - snapshot_name is not defined
+
+    - name: Build list of target IPs
+      set_fact:
+        all_vm_ips: "{{ (groups['k3s_masters'] | default([])) + (groups['k3s_workers'] | default([])) }}"
+
+    - name: Fail if empty inventory groups
+      fail:
+        msg: "Нет хостов в группах k3s_masters / k3s_workers. Убедись что -i ansible/hosts указан."
+      when: all_vm_ips | length == 0
+
+    - name: Initialize vm_list
+      set_fact:
+        vm_list: []
+
+    - name: Accumulate vm_list from host_vars
+      set_fact:
+        vm_list: "{{ vm_list + [ {
+          'name':   hostvars[item].name | default(item),
+          'ip':     item,
+          'vmid':   hostvars[item].vmid | default(None),
+          'node':   hostvars[item].proxmox_node | default(None)
+        } ] }}"
+      loop: "{{ all_vm_ips }}"
+
+    - name: Validate vm metadata
+      fail:
+        msg: "Для одного или более хостов нет vmid или proxmox_node в host_vars. Проверь ansible/host_vars/<IP>.yml."
+      when: vm_list | selectattr('vmid','equalto', None) | list | length > 0
+            or vm_list | selectattr('node','equalto', None) | list | length > 0
+
+    - name: Show built vm_list
+      debug:
+        var: vm_list
+
+    - name: Set base URL fact
+      set_fact:
+        proxmox_api_base_url: "https://{{ lookup('env','PROXMOX_API_HOST') }}:8006/api2/json"
+
+    - name: Show snapshot plan
+      debug:
+        msg: "Создаём снапшот '{{ snapshot_name }}' include_ram={{ include_ram }} на {{ vm_list | length }} ВМ"
+
+    - name: Query existing snapshots per VM
+      loop: "{{ vm_list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      uri:
+        url: "{{ proxmox_api_base_url }}/nodes/{{ item.node }}/qemu/{{ item.vmid }}/snapshot"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ lookup('env','PROXMOX_API_TOKEN_ID') }}={{ lookup('env','PROXMOX_API_TOKEN_SECRET') }}"
+        validate_certs: false
+        return_content: true
+        status_code: 200
+        timeout: "{{ request_timeout }}"
+      register: existing_snapshot_calls
+
+    - name: Build map of existing snapshots
+      set_fact:
+        existing_snapshots_map: >-
+          {{
+            dict(
+              existing_snapshot_calls.results
+              | map(attribute='item')
+              | map(attribute='vmid')
+              | zip(
+                  existing_snapshot_calls.results
+                  | map(attribute='json')
+                  | map('default', {})
+                  | map(attribute='data')
+                  | map('default', [])
+                  | map('map', attribute='name')
+                  | map('list')
+                )
+            )
+          }}
+
+    - name: Show existing snapshots map
+      debug:
+        var: existing_snapshots_map
+
+    - name: Create snapshot where missing
+      loop: "{{ vm_list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: snapshot_name not in (existing_snapshots_map[item.vmid] | default([]))
+      uri:
+        url: "{{ proxmox_api_base_url }}/nodes/{{ item.node }}/qemu/{{ item.vmid }}/snapshot"
+        method: POST
+        headers:
+          Authorization: "PVEAPIToken={{ lookup('env','PROXMOX_API_TOKEN_ID') }}={{ lookup('env','PROXMOX_API_TOKEN_SECRET') }}"
+        body_format: form-urlencoded
+        body:
+          snapname: "{{ snapshot_name }}"
+          description: "{{ snapshot_description }}"
+          vmstate: "{{ 1 if include_ram | bool else 0 }}"
+        validate_certs: false
+        status_code: 200
+        return_content: true
+        timeout: "{{ request_timeout }}"
+      register: create_results
+
+    - name: Report created snapshots
+      when: create_results is defined
+      debug:
+        msg: >-
+          {{
+            create_results.results
+            | selectattr('status','equalto', 200)
+            | map(attribute='item')
+            | map(attribute='name')
+            | list
+            | length
+            | string
+          }} snapshots created: {{
+            create_results.results
+            | selectattr('status','equalto', 200)
+            | map(attribute='item')
+            | map(attribute='name')
+            | list
+          }}
+
+    - name: Report skipped (already existed)
+      debug:
+        msg: >-
+          Снапшот '{{ snapshot_name }}' уже существовал на ВМ: {{
+            vm_list
+            | rejectattr('vmid','in', create_results.results | default([]) | map(attribute='item') | map(attribute='vmid') | list)
+            | selectattr('vmid','in', existing_snapshots_map.keys())
+            | selectattr('vmid','defined')
+            | selectattr('vmid','in',
+                existing_snapshots_map.keys()
+              )
+            | map(attribute='name') | list
+          }}
+      when: existing_snapshots_map | length > 0

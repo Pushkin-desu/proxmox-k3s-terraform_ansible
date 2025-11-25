@@ -120,16 +120,27 @@ qm template 9000
 ---
 ## Дальнейшие шаги выполняются снова на Linux машине (LXC Debian 13)
 
-## Шаг 3. Подготовка переменных terraform.tfvars
+## Шаг 3. Подготовка переменных
 
+
+## .env
+Сформируйте файл .env и заполните его вашими данными
+```bash
+cp .env.example .env
+
+nano .env
+```
+
+## После настройки .env обязательно выполните 
+```bash
+source .env
+```
+Иначе система не подхватит переменные
+
+## terraform.tfvars
 Пример файла `terraform.tfvars`:
 
 ```hcl
-# Proxmox API
-proxmox_api_url          = "https://pve1.local:8006/api2/json"
-proxmox_api_token_id     = "root@pam!terraform"
-proxmox_api_token_secret = "свой secret"
-
 # Шаблон
 template_vm_id           = 9000    # номер вашего cloud-init шаблона
 
@@ -147,54 +158,54 @@ disk_size_gb   = 30
 # Описание VM (можно разнести на разные узлы)
 cluster_nodes = [
   {
-    name        = "k3s-master"
-    vmid        = 4000
-    target_node = "pve1"
+    name        = "k3s-master-1"
+    vmid        = 4010
+    target_node = "pve"
     cores       = 2
     memory      = 4096
     ip          = "192.168.1.60/24"
     role        = "master"
-    datastore   = ""    # если хотите вручную — тут локальный стор (local-lvm)
+    datastore   = "" 
   },
   {
-    name        = "k3s-worker-1"
-    vmid        = 4001
-    target_node = "pve1"
+    name        = "k3s-master-2"
+    vmid        = 4011
+    target_node = "pve"
     cores       = 2
     memory      = 4096
     ip          = "192.168.1.61/24"
-    role        = "worker"
-    datastore   = ""
+    role        = "master"
+    datastore   = "" 
   },
   {
-    name        = "k3s-worker-2"
-    vmid        = 4002
-    target_node = "pve1"
+    name        = "k3s-worker-1"
+    vmid        = 4020
+    target_node = "pve"
     cores       = 2
     memory      = 4096
     ip          = "192.168.1.62/24"
     role        = "worker"
-    datastore   = ""
+    datastore   = "" 
   },
   {
-    name        = "k3s-worker-3"
-    vmid        = 4003
-    target_node = "pve2"
+    name        = "k3s-worker-2"
+    vmid        = 4021
+    target_node = "pve"
     cores       = 2
     memory      = 4096
     ip          = "192.168.1.63/24"
     role        = "worker"
-    datastore   = ""
+    datastore   = "" 
   },
   {
-    name        = "k3s-worker-4"
-    vmid        = 4004
-    target_node = "pve2"
+    name        = "k3s-worker-3"
+    vmid        = 4022
+    target_node = "pve"
     cores       = 2
     memory      = 4096
     ip          = "192.168.1.64/24"
     role        = "worker"
-    datastore   = ""
+    datastore   = "" 
   }
 ]
 ```
@@ -229,7 +240,7 @@ terraform apply
 
 ## Шаг 5. Настройка Ansible и развертывание k3s
 
-В репозитории лежит файл gen_ansible_hosts.py, он сгенерирует файлы ansible/hosts и ansible/group_vars/all.yml. Версия K3S жёстко указана.
+В репозитории лежит файл gen_ansible_hosts.py, он сгенерирует файлы ansible/hosts и ansible/group_vars/all.yml. А также каталог ansible/host_vars Версия K3S жёстко указана.
 
 1. Запустите gen_ansible_hosts.py, укажите имя пользователя ВМ и путь к приватной части SSH ключа.
 ```bash
@@ -259,6 +270,20 @@ pipelining = True
 ```bash
 ansible-playbook -i ansible/hosts ansible/install-k3s.yml
 ```
+---
+
+## Примечание
+В каталоге ansible есть плейбуки snapshot-create.yml и snapshot-rollback.yml
+
+Они предназначены для массового создания Снапшотов и возращения к ним. Дабы вы всегда могли откатиться к предыдущему шагу.
+
+Использование:
+```bash
+ansible-playbook -i ansible/hosts ansible/snapshot-create.yml -e snapshot_name=<Имя_снапшота>
+
+ansible-playbook -i ansible/hosts ansible/snapshot-rollback.yml -e snapshot_name=<Имя_снапшота>
+```
+
 
 ---
 
@@ -273,7 +298,7 @@ install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
 ```
 
 ```bash
-export KUBECONFIG=./ansible/kubeconfig-master.yaml
+export KUBECONFIG=./kubeconfig-master.yaml
 kubectl get nodes -o wide
 kubectl get pods -A
 ```

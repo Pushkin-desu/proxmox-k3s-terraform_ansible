@@ -28,7 +28,9 @@
       modprobe:
         name: "{{ item }}"
         state: present
-      loop: [overlay, br_netfilter]
+      loop:
+        - overlay
+        - br_netfilter
 
     - name: Persist modules on reboot
       copy:
@@ -50,8 +52,8 @@
     - name: Apply sysctl
       command: sysctl --system
 
-- name: Install / start k3s servers (masters)
-  hosts: k3s_masters
+- name: Initialize first k3s master
+  hosts: "{{ groups['k3s_masters'][0] }}"
   become: true
   vars:
     k3s_bin_path: /usr/local/bin/k3s
@@ -62,125 +64,162 @@
         dest: "{{ k3s_bin_path }}"
         mode: '0755'
 
-    - name: Check if node-token exists (already initialized)
+    - name: Check etcd member dir (cluster initialized?)
       stat:
-        path: /var/lib/rancher/k3s/server/node-token
-      register: node_token_file
+        path: /var/lib/rancher/k3s/server/db/etcd/member
+      register: etcd_member_dir
 
-    - name: Cluster init on FIRST master (only if not initialized)
-      command: >
-        /usr/local/bin/k3s server
-        {{ k3s_server_args | join(' ') }}
-        --cluster-init
-      when: inventory_hostname == groups['k3s_masters'][0] and not node_token_file.stat.exists
+    - name: Set cluster_init fact (true если нет etcd данных)
+      set_fact:
+        cluster_init: "{{ not etcd_member_dir.stat.exists }}"
 
-    - name: Join other masters (only if not initialized)
-      command: >
-        /usr/local/bin/k3s server
-        {{ k3s_server_args | join(' ') }}
-        --server https://{{ hostvars[groups['k3s_masters'][0]].k3s_master_ip }}:6443
-        --token {{ hostvars[groups['k3s_masters'][0]].node_token }}
-      when: inventory_hostname != groups['k3s_masters'][0] and not node_token_file.stat.exists and hostvars[groups['k3s_masters'][0]].node_token is defined
+    - name: Debug init mode
+      debug:
+        msg: "cluster_init={{ cluster_init }} (etcd_member_dir.exists={{ etcd_member_dir.stat.exists }})"
 
-    - name: Create systemd unit (idempotent server)
-      copy:
+    - name: Render k3s server unit (first master)
+      template:
+        src: templates/k3s.service.j2
         dest: /etc/systemd/system/k3s.service
         mode: '0644'
-        content: |
-          [Unit]
-          Description=Lightweight Kubernetes (k3s) server
-          After=network-online.target
-          Wants=network-online.target
-          [Service]
-          Type=notify
-          ExecStart=/usr/local/bin/k3s server {{ k3s_server_args | join(' ') }}
-          Restart=always
-          LimitNOFILE=1048576
-          [Install]
-          WantedBy=multi-user.target
+      vars:
+        join_server: ""
+        join_token: ""
 
     - name: systemd reload
       systemd:
         daemon_reload: true
 
-    - name: Ensure k3s server running
-      systemd:
-        name: k3s
-        state: started
-        enabled: true
+    - block:
+        - name: Ensure k3s server running
+          systemd:
+            name: k3s
+            state: started
+            enabled: true
 
-    - name: Wait API (first master only)
-      wait_for:
-        host: "{{ k3s_master_ip }}"
-        port: 6443
-        timeout: 300
-      when: inventory_hostname == groups['k3s_masters'][0]
+        - name: Wait for node-token file
+          wait_for:
+            path: /var/lib/rancher/k3s/server/node-token
+            timeout: 300
+
+        - name: Wait for API port
+          wait_for:
+            host: "{{ k3s_master_ip }}"
+            port: 6443
+            timeout: 300
+
+      rescue:
+        - name: Collect k3s journal
+          command: journalctl -u k3s -n 200 --no-pager
+          register: k3s_journal
+          ignore_errors: true
+        - name: Show journal
+          debug:
+            msg: "{{ k3s_journal.stdout | default('no journal') }}"
+        - name: Fail early
+          fail:
+            msg: "k3s failed to start on first master"
 
     - name: Read node-token
-      command: cat /var/lib/rancher/k3s/server/node-token
+      slurp:
+        src: /var/lib/rancher/k3s/server/node-token
       register: ntok
       changed_when: false
 
-    - name: Set node_token fact
+    - name: Set cluster_node_token fact
       set_fact:
-        node_token: "{{ ntok.stdout }}"
+        cluster_node_token: "{{ ntok.content | b64decode | trim }}"
 
-    - name: Read kubeconfig (first master only)
-      command: cat /etc/rancher/k3s/k3s.yaml
+    - name: Read kubeconfig
+      slurp:
+        src: /etc/rancher/k3s/k3s.yaml
       register: kube_cfg
       changed_when: false
-      when: inventory_hostname == groups['k3s_masters'][0]
 
-    - name: Replace localhost with k3s_master_ip
+    - name: Adjust kubeconfig server IP
       set_fact:
-        kubeconfig_content: "{{ kube_cfg.stdout | replace('127.0.0.1', k3s_master_ip) }}"
-      when: inventory_hostname == groups['k3s_masters'][0]
+        kubeconfig_content: "{{ (kube_cfg.content | b64decode) | replace('127.0.0.1', k3s_master_ip) }}"
 
     - name: Save kubeconfig locally
       copy:
         content: "{{ kubeconfig_content }}"
-        dest: "./kubeconfig-master.yaml"
+        dest: "../kubeconfig-master.yaml"
         mode: '0644'
       delegate_to: localhost
-      when: inventory_hostname == groups['k3s_masters'][0]
       become: false
+
+- name: Join other k3s masters
+  hosts: "{{ groups['k3s_masters'][1:] }}"
+  become: true
+  vars:
+    k3s_bin_path: /usr/local/bin/k3s
+    first_master: "{{ groups['k3s_masters'][0] }}"
+  tasks:
+    - name: Assert token available
+      assert:
+        that:
+          - hostvars[first_master].cluster_node_token is defined
+        fail_msg: "Cluster token not found on first master."
+
+    - name: Download k3s binary
+      get_url:
+        url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version }}/k3s"
+        dest: "{{ k3s_bin_path }}"
+        mode: '0755'
+
+    - name: Render k3s server unit (joining master)
+      template:
+        src: templates/k3s.service.j2
+        dest: /etc/systemd/system/k3s.service
+        mode: '0644'
+      vars:
+        cluster_init: false
+        join_server: "https://{{ hostvars[first_master].k3s_master_ip }}:6443"
+        join_token: "{{ hostvars[first_master].cluster_node_token }}"
+
+    - name: systemd reload
+      systemd:
+        daemon_reload: true
+
+    - name: Ensure k3s server running (joined master)
+      systemd:
+        name: k3s
+        state: started
+        enabled: true
 
 - name: Install / start k3s agents (workers)
   hosts: k3s_workers
   become: true
   vars:
     k3s_bin_path: /usr/local/bin/k3s
+    first_master: "{{ groups['k3s_masters'][0] }}"
   tasks:
+    - name: Assert token available
+      assert:
+        that:
+          - hostvars[first_master].cluster_node_token is defined
+        fail_msg: "Cluster token not found on first master."
+
     - name: Download k3s binary
       get_url:
         url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version }}/k3s"
         dest: "{{ k3s_bin_path }}"
         mode: '0755'
 
-    - name: Create systemd unit for agent
-      copy:
+    - name: Render k3s agent unit
+      template:
+        src: templates/k3s-agent.service.j2
         dest: /etc/systemd/system/k3s-agent.service
         mode: '0644'
-        content: |
-          [Unit]
-          Description=Lightweight Kubernetes (k3s) agent
-          After=network-online.target
-          Wants=network-online.target
-          [Service]
-          Type=exec
-          Environment="K3S_URL=https://{{ hostvars[groups['k3s_masters'][0]].k3s_master_ip }}:6443"
-          Environment="K3S_TOKEN={{ hostvars[groups['k3s_masters'][0]].node_token }}"
-          ExecStart=/usr/local/bin/k3s agent {{ k3s_agent_args | join(' ') }}
-          Restart=always
-          LimitNOFILE=1048576
-          [Install]
-          WantedBy=multi-user.target
+      vars:
+        k3s_url: "https://{{ hostvars[first_master].k3s_master_ip }}:6443"
+        k3s_token: "{{ hostvars[first_master].cluster_node_token }}"
 
     - name: systemd reload
       systemd:
         daemon_reload: true
 
-    - name: Ensure k3s-agent started
+    - name: Ensure k3s agent running
       systemd:
         name: k3s-agent
         state: started

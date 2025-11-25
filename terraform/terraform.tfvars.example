@@ -1,8 +1,3 @@
-# Proxmox API
-proxmox_api_url        = "https://pve.local:8006/api2/json"
-proxmox_api_token_id   = "root@pam!terraform"
-proxmox_api_token_secret = "your_secret_token"
-
 # Шаблон (cloud-init) VM
 template_vm_id         = 9000
 
