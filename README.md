@@ -23,6 +23,13 @@ ansible-playbook -i ansible/hosts ansible/snapshot-rollback.yml -e snapshot_name
 
 Также есть плейбуки для запуска всех ВМ кластера и остановки, а также получение статуса ВМ.
 Использовал для интеграции с ТГ ботом (управление кластером с любого устройства)
+```bash
+ansible-playbook -i ansible/hosts ansible/cluster-start.yml
+
+ansible-playbook -i ansible/hosts ansible/cluster-stop.yml
+
+ansible-playbook -i ansible/hosts ansible/cluster-status.yml
+```
 
 ---
 ## Шаг 1. Как получить API токен для Proxmox
