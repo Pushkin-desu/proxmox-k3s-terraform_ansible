@@ -1,0 +1,49 @@
+- name: Start k3s VMs via Proxmox API
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Build list of target IPs
+      set_fact:
+        all_vm_ips: "{{ (groups['k3s_masters']|default([])) + (groups['k3s_workers']|default([])) }}"
+
+    - name: Fail if empty inventory groups
+      fail:
+        msg: "No hosts in k3s_masters/k3s_workers. -i ansible/hosts?"
+      when: all_vm_ips | length == 0
+
+    - name: Initialize vm_list
+      set_fact:
+        vm_list: []
+
+    - name: Accumulate vm_list from host_vars
+      set_fact:
+        vm_list: "{{ vm_list + [ {
+          'name': hostvars[item].name | default(item),
+          'vmid': hostvars[item].vmid | default(None),
+          'node': hostvars[item].proxmox_node | default(None)
+        } ] }}"
+      loop: "{{ all_vm_ips }}"
+
+    - name: Validate vm metadata
+      fail:
+        msg: "Для одного или более хостов нет vmid или proxmox_node в host_vars. Проверь ansible/host_vars/<IP>.yml."
+      when: vm_list | selectattr('vmid','equalto', None) | list | length > 0
+            or vm_list | selectattr('node','equalto', None) | list | length > 0
+
+    - name: Start each VM
+      uri:
+        url: "https://{{ lookup('env','PROXMOX_API_HOST') }}:8006/api2/json/nodes/{{ item.node }}/qemu/{{ item.vmid }}/status/start"
+        method: POST
+        headers:
+          Authorization: "PVEAPIToken={{ lookup('env','PROXMOX_API_TOKEN_ID') }}={{ lookup('env','PROXMOX_API_TOKEN_SECRET') }}"
+        validate_certs: false
+        status_code: 200
+        timeout: 120
+      loop: "{{ vm_list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: start_results
+
+    - name: Report
+      debug:
+        msg: "{{ start_results.results | map(attribute='item.name') | list }}: Started"
