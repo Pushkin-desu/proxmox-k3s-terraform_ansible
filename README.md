@@ -9,6 +9,22 @@
 
 ---
 
+## Примечание
+В каталоге ansible есть плейбуки snapshot-create.yml и snapshot-rollback.yml
+
+Они предназначены для массового создания Снапшотов и возращения к ним. Дабы вы всегда могли откатиться к предыдущему шагу.
+
+Использование:
+```bash
+ansible-playbook -i ansible/hosts ansible/snapshot-create.yml -e snapshot_name=<Имя_снапшота>
+
+ansible-playbook -i ansible/hosts ansible/snapshot-rollback.yml -e snapshot_name=<Имя_снапшота>
+```
+
+Также есть плейбуки для запуска всех ВМ кластера и остановки, а также получение статуса ВМ.
+Использовал для интеграции с ТГ ботом (управление кластером с любого устройства)
+
+---
 ## Шаг 1. Как получить API токен для Proxmox
 
 1. **Зайдите в Proxmox Web UI** под root правами.
@@ -270,21 +286,6 @@ pipelining = True
 ```bash
 ansible-playbook -i ansible/hosts ansible/install-k3s.yml
 ```
----
-
-## Примечание
-В каталоге ansible есть плейбуки snapshot-create.yml и snapshot-rollback.yml
-
-Они предназначены для массового создания Снапшотов и возращения к ним. Дабы вы всегда могли откатиться к предыдущему шагу.
-
-Использование:
-```bash
-ansible-playbook -i ansible/hosts ansible/snapshot-create.yml -e snapshot_name=<Имя_снапшота>
-
-ansible-playbook -i ansible/hosts ansible/snapshot-rollback.yml -e snapshot_name=<Имя_снапшота>
-```
-
-
 ---
 
 ## Шаг 6. Проверка статуса кластера
