@@ -2,7 +2,7 @@ terraform {
   required_providers {
     proxmox = {
       source  = "bpg/proxmox"
-      version = "0.73.2"
+      version = "0.87.0"
     }
   }
 }
@@ -28,6 +28,7 @@ resource "proxmox_virtual_environment_vm" "kvm" {
 
   clone {
     vm_id = var.template_vm_id
+    node_name = var.template_node_name
     full  = true
   }
 
@@ -41,7 +42,7 @@ resource "proxmox_virtual_environment_vm" "kvm" {
   }
 
   disk {
-    datastore_id = each.value.datastore != "" ? each.value.datastore : var.datastore
+    datastore_id = contains(["local-lvm", "local-zfs"], each.value.datastore) ? var.datastore : (each.value.datastore != "" ? each.value.datastore : var.datastore)
     size         = var.disk_size_gb
     interface    = "scsi0"
     file_format  = "raw"
@@ -53,7 +54,7 @@ resource "proxmox_virtual_environment_vm" "kvm" {
   }
 
   initialization {
-    datastore_id = each.value.datastore != "" ? each.value.datastore : var.datastore
+    datastore_id = contains(["local-lvm", "local-zfs"], each.value.datastore) ? var.datastore : (each.value.datastore != "" ? each.value.datastore : var.datastore)
     ip_config {
       ipv4 {
         address = each.value.ip
@@ -83,11 +84,13 @@ output "nodes_with_roles" {
   value = {
     for n in var.cluster_nodes :
     n.name => {
-      ip   = replace(n.ip, "/24", "")
-      role = n.role
-      vmid = n.vmid
-      node = n.target_node
-      ds   = n.datastore != "" ? n.datastore : var.datastore
+      ip           = replace(n.ip, "/24", "")
+      role         = n.role
+      vmid         = n.vmid
+      node         = n.target_node
+      target_store = n.datastore != "" ? n.datastore : var.datastore
+      current_store = contains(["local-lvm", "local-zfs"], n.datastore) ? var.datastore : (n.datastore != "" ? n.datastore : var.datastore)
+      needs_migration = contains(["local-lvm", "local-zfs"], n.datastore)
     }
   }
 }

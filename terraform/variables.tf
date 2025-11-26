@@ -12,6 +12,11 @@ variable "proxmox_api_token_secret" {
   sensitive = true
 }
 
+variable "template_node_name" {
+  type        = string
+  description = "Node name cloud-init шаблона (например pve)"
+}
+
 variable "template_vm_id" {
   type        = number
   description = "VMID cloud-init шаблона (например 9000)"

@@ -14,19 +14,24 @@ def ssh_update_known_hosts(ip):
     except Exception as e:
         print(f"error for {ip}: {e}")
 
-user = input("Введите ansible_user [user]: ") or "user"
-keyfile = input("Введите путь до ansible_ssh_private_key_file [/root/.ssh/id_rsa]: ") or "/root/.ssh/id_rsa"
+user = input("enter username for cloudinit VM`s [user]: ") or "user"
+keyfile = input("enter path to ssh_private_key_file [/root/.ssh/id_rsa]: ") or "/root/.ssh/id_rsa"
 
 tf_json = subprocess.check_output(["terraform", "-chdir=terraform", "output", "-json", "nodes_with_roles"])
-nodes = json.loads(tf_json) # { name: { ip, role, vmid, node, ds } }
+nodes = json.loads(tf_json) # { name: { ip, role, vmid, node, target_store, current_store, needs_migration } }
 
 masters = []
 workers = []
+nodes_needing_migration = []
+
 for name, meta in nodes.items():
     if meta["role"] == "master":
         masters.append(meta["ip"])
     elif meta["role"] == "worker":
         workers.append(meta["ip"])
+    
+    if meta.get("needs_migration", False):
+        nodes_needing_migration.append(meta["ip"])
 
 if not masters:
     raise SystemExit("no one Master in terraform output nodes_with_roles.")
@@ -34,16 +39,21 @@ if not masters:
 master_ip = masters[0]
 
 print("\n--- Updating known_hosts ---")
-for ip in masters + workers:
+all_ips = masters + workers
+for ip in all_ips:
     ssh_update_known_hosts(ip)
 
 os.makedirs("ansible", exist_ok=True)
+
 hosts_content = [
     "[k3s_masters]",
     *masters,
     "",
-    "[k3s_workers]",
+    "[k3s_workers]", 
     *workers,
+    "",
+    "[storage_migration]",
+    *nodes_needing_migration,
     "",
     "[all:vars]",
     "ansible_python_interpreter=/usr/bin/python3",
@@ -84,7 +94,7 @@ for name, meta in nodes.items():
     ip_to_entry[meta["ip"]] = {"name": name, **meta}
 
 created = []
-for ip in masters + workers:
+for ip in all_ips:
     entry = ip_to_entry.get(ip)
     if not entry:
         print(f"warning: terraform output has no metadata for ip {ip}, skipping host_vars")
@@ -95,9 +105,11 @@ for ip in masters + workers:
 name: {entry["name"]}
 vmid: {entry.get("vmid")}
 proxmox_node: {entry.get("node")}
-# optional:
-# datastore: {entry.get("ds")}
-# role: {entry.get("role")}
+role: {entry.get("role")}
+# Storage information for disk migration
+storage_target: {entry.get("target_store", "shared")}
+storage_current: {entry.get("current_store", "shared")}
+storage_needs_migration: {entry.get("needs_migration", False)}
 '''
     with open(hv_file, "w") as f:
         f.write(content)
@@ -109,3 +121,15 @@ if created:
         print(f" - {path}")
 else:
     print("no host_vars created (nothing matched)")
+
+if nodes_needing_migration:
+    print(f"\n--- Storage Migration Info ---")
+    print(f"Nodes needing storage migration ({len(nodes_needing_migration)}):")
+    for ip in nodes_needing_migration:
+        entry = ip_to_entry[ip]
+        print(f"  - {entry['name']} ({ip}): {entry['current_store']} -> {entry['target_store']}")
+    
+    print(f"\nRun storage migration playbook:")
+    print(f"  ansible-playbook -i ansible/hosts ansible/storage-migration.yml")
+else:
+    print(f"\nNo storage migration needed - all disks are in target locations")
