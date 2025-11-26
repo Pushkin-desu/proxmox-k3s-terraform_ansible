@@ -65,52 +65,50 @@
         timeout: "{{ request_timeout }}"
       register: vm_configs
 
-    - name: Extract disk list and current storage from VM config
+    - name: Process each VM and build disk migration list
       set_fact:
-        vm_list_with_disks: "{{ [] }}"
+        vm_list_with_disks: "{{ vm_list_with_disks_json | from_json }}"
+      vars:
+        vm_list_with_disks_json: >-
+          {%- set result = [] -%}
+          {%- for vm in vm_list -%}
+            {%- set config_index = loop.index0 -%}
+            {%- set config_data = vm_configs.results[config_index].json.data -%}
+            {%- set disks = [] -%}
+            
+            {%- for key, value in config_data.items() -%}
+              {%- if (key.startswith('scsi') or key.startswith('ide') or key.startswith('virtio') or key.startswith('sata') and ':' in key) and not key.startswith('scsihw') -%}
+                {%- set disk_name = key.split(':')[0] -%}
+                {%- set storage_parts = value.split(',') -%}
+                {%- set storage_part = storage_parts | select('match', '^[a-zA-Z]') | first | default('unknown') -%}
+                {%- set current_storage_full = storage_part.split('=')[1] if '=' in storage_part else storage_part -%}
+                {%- set current_storage = current_storage_full.split(':')[0] -%}
+                {%- set needs_migration = current_storage != vm.target_store -%}
+                {%- set _ = disks.append({
+                  'name': disk_name,
+                  'current_storage': current_storage_full,
+                  'current_storage_short': current_storage,
+                  'needs_migration': needs_migration
+                }) -%}
+              {%- endif -%}
+            {%- endfor -%}
 
-    - name: Build disk migration list
-      set_fact:
-        vm_list_with_disks: "{{ vm_list_with_disks + [ vm_item ] }}"
-      vars:
-        vm_item: "{{ vm_item | default({}) | combine({
-          'name': item.name,
-          'ip': item.ip,
-          'vmid': item.vmid,
-          'node': item.node,
-          'target_store': item.target_store,
-          'disks': disks_to_migrate,
-          'needs_any_migration': (disks_to_migrate | selectattr('needs_migration', 'equalto', true) | list | length > 0)
-        }) }}"
-      loop: "{{ vm_list }}"
-      vars:
-        vm_index: "{{ loop.index0 }}"
-        config_data: "{{ vm_configs.results[vm_index].json.data }}"
-        disks_to_migrate: "{{ [] }}"
-      loop_control:
-        label: "{{ item.name }}"
-      # Динамически создаем список дисков для каждого VM
-      # Используем inline Jinja2 для обработки
-      vars:
-        disks_to_migrate: >-
-          {% set disks = [] %}
-          {% for key, value in config_data.items() %}
-            {% if key.startswith(('scsi', 'ide', 'virtio', 'sata')) and ':' in key %}
-              {% set disk_name = key.split(':')[0] %}
-              {% set storage_part = value.split(',') | select('match', '^[a-zA-Z]') | list | first | default('unknown') %}
-              {% set current_storage = storage_part.split('=')[1] if '=' in storage_part else storage_part %}
-              {% set needs_migration = current_storage != item.target_store %}
-              {% set disk_info = {
-                'name': disk_name,
-                'current_storage': current_storage,
-                'needs_migration': needs_migration
-              } %}
-              {% if disks | selectattr('name', 'equalto', disk_name) | list | length == 0 %}
-                {% set _ = disks.append(disk_info) %}
-              {% endif %}
-            {% endif %}
-          {% endfor %}
-          {{ disks }}
+            {%- set needs_any_migration = (disks | selectattr('needs_migration') | list | length > 0) -%}
+            
+            {%- set _ = result.append({
+              'name': vm.name,
+              'ip': vm.ip,
+              'vmid': vm.vmid,
+              'node': vm.node,
+              'target_store': vm.target_store,
+              'disks': disks,
+              'needs_any_migration': needs_any_migration
+            }) -%}
+
+          
+
+          {%- endfor -%}
+          {{ result | to_json }}
 
     - name: Show disk analysis
       debug:
@@ -155,6 +153,9 @@
         return_content: true
         timeout: "{{ request_timeout }}"
       register: stop_results
+      retries: 5
+      delay: 10
+      until: stop_results is success
 
     - name: Wait for VMs to stop
       loop: "{{ vms_needing_migration }}"
@@ -175,14 +176,13 @@
       delay: 5
 
     - name: Migrate only disks that need migration
-      loop: "{{ vms_needing_migration }}"
+      loop: "{{ vms_needing_migration | subelements('disks', skip_missing=true) }}"
       loop_control:
-        label: "{{ item.name }}"
+        label: "{{ item.0.name }} - {{ item.1.name }}"
+      when: item.1.needs_migration
       vars:
-        current_vm: "{{ item }}"
-      loop: "{{ item.disks | selectattr('needs_migration') }}"
-      vars:
-        disk_info: "{{ item }}"
+        current_vm: "{{ item.0 }}"
+        disk_info: "{{ item.1 }}"
       uri:
         url: "{{ proxmox_api_base_url }}/nodes/{{ current_vm.node }}/qemu/{{ current_vm.vmid }}/move_disk"
         method: POST
@@ -198,6 +198,9 @@
         return_content: true
         timeout: "{{ request_timeout }}"
       register: migrate_results
+      retries: 10
+      delay: 10
+      until: migrate_results is success
 
     - name: Wait for all disk migrations to complete
       loop: "{{ vms_needing_migration }}"
@@ -233,6 +236,9 @@
         return_content: true
         timeout: "{{ request_timeout }}"
       register: start_results
+      retries: 5
+      delay: 10
+      until: start_results is success
 
     - name: Wait for VMs to start
       loop: "{{ vms_needing_migration }}"

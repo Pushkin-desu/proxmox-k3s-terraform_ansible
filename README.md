@@ -31,6 +31,13 @@ ansible-playbook -i ansible/hosts ansible/cluster-stop.yml
 ansible-playbook -i ansible/hosts ansible/cluster-status.yml
 ```
 
+Вы можете развернуть на кластер нод Proxmox, но диски шаблона должны находиться на общем хранилище, например NFS.
+
+Также после развёртывания кластера, диски с общего хранилища можно перенести на локальное хранилище ноды, либо через GUI Proxmox, либо через playbook
+```bash
+ansible-playbook -i ansible/hosts ansible/storage-migration.yml
+```
+
 ---
 ## Шаг 1. Как получить API токен для Proxmox
 
@@ -179,6 +186,12 @@ datastore      = "local-lvm"
 disk_size_gb   = 30
 
 # Описание VM (можно разнести на разные узлы)
+
+---
+Подробнее про datastore, вверху указано целевое хранилишще по умолчанию, я указывал для двух нод общее NFS - shared, в таком случае внизу в cluster_nodes указываем целевое хранилище, например local-lvm.
+После установки Виртуальных машин диск останется shared, так как мы указали Локальное хранилище, воспользуйтесь плейбуком миграции из вкладки Примечание. Ansible перенесёт диски виртуалок на желаемое вами хранилище.
+---
+
 cluster_nodes = [
   {
     name        = "k3s-master-1"
@@ -188,7 +201,7 @@ cluster_nodes = [
     memory      = 4096
     ip          = "192.168.1.60/24"
     role        = "master"
-    datastore   = "" 
+    datastore   = ""
   },
   {
     name        = "k3s-master-2"
@@ -255,7 +268,11 @@ terraform plan
 Убедитесь, что все VM правильно распределяются и нет ошибок по шаблону, network, datastore.
 4. Применить:
 ```bash
-terraform apply
+terraform apply 
+```
+Если у вас медленное хранилище, используйте флаг -parallelism=1
+```bash
+terraform apply -parallelism=1
 ```
 Дождитесь вывода об успешном создании, получите список VM, их IP и роли.
 
