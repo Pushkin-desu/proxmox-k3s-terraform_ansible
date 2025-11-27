@@ -95,7 +95,17 @@ cd /opt
 git clone https://github.com/Pushkin-desu/proxmox-k3s-terraform_ansible.git
 
 cd proxmox-k3s-terraform_ansible
+```
 
+5) Установите менеджер пакетов Helm
+```bash
+curl -fsSL https://packages.buildkite.com/helm-linux/helm-debian/gpgkey | gpg --dearmor | tee /usr/share/keyrings/helm.gpg > /dev/null
+
+echo "deb [signed-by=/usr/share/keyrings/helm.gpg] https://packages.buildkite.com/helm-linux/helm-debian/any/ any main" | tee /etc/apt/sources.list.d/helm-stable-debian.list
+
+apt-get update
+
+apt-get install helm
 ```
 
 ## Шаг 2. Как создать cloud‑init шаблон (Ubuntu образ)
@@ -329,6 +339,52 @@ kubectl get pods -A
 ```
 
 ---
+## Шаг 7. Установка Ingress Nginx и ArgoCD
+Проверьте что выполнили
+```bash
+export KUBECONFIG=./kubeconfig-master.yaml
+```
+
+1. Добавляем  репозиторий Nginx 
+```bash
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+```
+
+2. Обновляем репозитории
+```bash
+helm repo update
+```
+
+3. Устанавливаем ingress
+```bash
+kubectl create namespace ingress-nginx
+
+helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx -n ingress-nginx --set controller.ingressClassResource.name=nginx --set controller.ingressClass=nginx --set controller.service.type=NodePort --set controller.service.enableHttp=true --set controller.service.enableHttps=false --set controller.service.nodePorts.http=30080 --set controller.config.use-forwarded-headers="true" --set-string controller.config.proxy-real-ip-cidr="192.168.17.8/32"
+```
+
+Где, 192.168.17.8/32 адрес вышестоящего прокси сервера. Пример моей схемы
+Пользователь → HTTPS → HaProxy (tcp режим без терминации SSL) -> Nginx (WildCard cert + IP filter) → HTTP → Ingress в K3s
+
+4. Установка ArgoCD
+
+Замените argocd.domain.local на ваше доменное имя в файлах argocd-ingress.yaml и argocd-values.yaml
+```bash
+helm repo add argo-cd https://argoproj.github.io/argo-helm
+
+helm dep update charts/argo-cd/
+
+helm upgrade --install argocd charts/argo-cd/ -n argocd --create-namespace
+```
+
+5. Настройка доменного имени и получение пароля admin
+```bash
+kubectl apply -f charts/argo-cd/argocd-ingress.yaml
+
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+```
+
+6. Скопируйте полученный пароль и откройте в браузере указанную ранее ссылку, для входа используйте admin и полученный пароль. Позже сменим на свой.
+---
 
 ## FAQ и типичные ошибки
 
@@ -338,6 +394,7 @@ kubectl get pods -A
 - **kubectl не находит nodes:** Проверьте, что k3s агент запущен, и все VM видят корректный master IP.
 
 ---
+
 
 ## TODO
 

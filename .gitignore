@@ -1,3 +1,4 @@
 kubectl
 .env
 kubeconfig-*.yaml
+helm
