@@ -77,7 +77,7 @@
             {%- set disks = [] -%}
             
             {%- for key, value in config_data.items() -%}
-              {%- if (key.startswith('scsi') or key.startswith('ide') or key.startswith('virtio') or key.startswith('sata') and ':' in key) and not key.startswith('scsihw') -%}
+              {%- if (key.startswith('scsi') or key.startswith('virtio') or key.startswith('sata') and ':' in key) and not key.startswith('scsihw') -%}
                 {%- set disk_name = key.split(':')[0] -%}
                 {%- set storage_parts = value.split(',') -%}
                 {%- set storage_part = storage_parts | select('match', '^[a-zA-Z]') | first | default('unknown') -%}

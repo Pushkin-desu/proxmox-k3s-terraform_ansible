@@ -1,47 +1,34 @@
 ---
-# ansible/install-apps.yml
-# Автоматизация установки Helm, kubectl, ingress-nginx и ArgoCD на master-ноду K3s
-
-- hosts: masters
-  become: yes
+- hosts: localhost
+  connection: local
+  gather_facts: false
   vars:
-    kubectl_version: v1.29.3 # можно вынести в group_vars
-    proxy_real_ip_cidr: "192.168.17.8/32"  # по умолчанию, можно переопределить
-    argocd_domain: "argocd.domain.local"    # по умолчанию, можно переопределить
+    proxy_real_ip_cidr: "{{ lookup('env','PROXY_REAL_IP_CIDR') }}"
+    argocd_domain: "{{ lookup('env','ARGOCD_DOMAIN') }}"
+    kubeconfig_path: "{{ lookup('env','KUBECONFIG') | default('/opt/dev/kubeconfig-master.yaml', true) }}"
   tasks:
-    - name: Ensure apt cache is updated
-      apt:
-        update_cache: yes
-
-    - name: Install Helm
-      apt:
-        name: helm
-        state: present
-      tags: helm
-
-    - name: Download kubectl
-      get_url:
-        url: "https://dl.k8s.io/release/{{ kubectl_version }}/bin/linux/amd64/kubectl"
-        dest: /usr/local/bin/kubectl
-        mode: '0755'
-      tags: kubectl
-
     - name: Add ingress-nginx repo
       shell: helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
       args:
-        creates: /root/.cache/helm/repository/ingress-nginx-index.yaml
+        creates: ~/.cache/helm/repository/ingress-nginx-index.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
       tags: ingress
 
     - name: Update helm repos
       shell: helm repo update
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
       tags: ingress
 
     - name: Create ingress-nginx namespace
       shell: kubectl create namespace ingress-nginx || true
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
       tags: ingress
 
     - name: Install ingress-nginx
-      shell: |
+      shell: >
         helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
           -n ingress-nginx \
           --set controller.ingressClassResource.name=nginx \
@@ -51,44 +38,87 @@
           --set controller.service.enableHttps=false \
           --set controller.service.nodePorts.http=30080 \
           --set controller.config.use-forwarded-headers="true" \
-          --set-string controller.config.proxy-real-ip-cidr="{{ proxy_real_ip_cidr }}"
+          {% if proxy_real_ip_cidr %}--set-string controller.config.proxy-real-ip-cidr="{{ proxy_real_ip_cidr }}"{% endif %}
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
       tags: ingress
+
+
+    - name: Template argocd-values.yaml from j2
+      template:
+        src: ../helm/argocd-values.yaml.j2
+        dest: ../helm/argocd-values.yaml
+      tags: argocd
 
     - name: Add argo-cd repo
       shell: helm repo add argo-cd https://argoproj.github.io/argo-helm
       args:
-        creates: /root/.cache/helm/repository/argo-cd-index.yaml
+        creates: ~/.cache/helm/repository/argo-cd-index.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
       tags: argocd
 
     - name: Update helm repos (argo-cd)
       shell: helm repo update
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
       tags: argocd
 
     - name: Install argo-cd
       shell: |
-        helm upgrade --install argocd argo-cd/argo-cd -n argocd --create-namespace
+        helm upgrade --install argocd argo-cd/argo-cd -n argocd --create-namespace -f ../helm/argocd-values.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
       tags: argocd
 
-    - name: Template ArgoCD ingress
-      template:
-        src: argocd-ingress.yaml.j2
-        dest: /root/charts/argo-cd/argocd-ingress.yaml
+    - name: Wait for ArgoCD server rollout
+      shell: kubectl -n argocd rollout status deploy/argocd-server --timeout=180s
+      register: argocd_server_rollout
+      retries: 10
+      delay: 10
+      until: argocd_server_rollout.rc == 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
       tags: argocd
 
-    - name: Apply ArgoCD ingress
-      shell: kubectl apply -f /root/charts/argo-cd/argocd-ingress.yaml
-      args:
-        warn: false
-      ignore_errors: yes
+    - name: Wait for ArgoCD repo-server rollout
+      shell: kubectl -n argocd rollout status deploy/argocd-repo-server --timeout=180s
+      register: argocd_repo_rollout
+      retries: 10
+      delay: 10
+      until: argocd_repo_rollout.rc == 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
       tags: argocd
 
-    - name: Print ArgoCD admin password
+    - name: Wait for ArgoCD admin secret to be created
       shell: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
       register: argocd_admin_pass
+      retries: 30
+      delay: 10
+      until: argocd_admin_pass.stdout != ""
       changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      tags: argocd
+
+    - name: Get ArgoCD ingress host
+      shell: kubectl -n argocd get ingress argocd-server -o jsonpath='{.spec.rules[0].host}'
+      register: argocd_ingress_host
+      retries: 12
+      delay: 5
+      until: argocd_ingress_host.stdout != ""
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
       tags: argocd
 
     - name: Show ArgoCD admin password
       debug:
         msg: "ArgoCD admin password: {{ argocd_admin_pass.stdout }}"
+      tags: argocd
+
+    - name: Show ArgoCD URL
+      debug:
+        msg: "ArgoCD доступен по адресу: http://{{ argocd_ingress_host.stdout }}"
       tags: argocd
