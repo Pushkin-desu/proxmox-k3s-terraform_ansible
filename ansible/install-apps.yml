@@ -43,13 +43,6 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       tags: ingress
 
-
-    - name: Template argocd-values.yaml from j2
-      template:
-        src: ../helm/argocd-values.yaml.j2
-        dest: ../helm/argocd-values.yaml
-      tags: argocd
-
     - name: Add argo-cd repo
       shell: helm repo add argo-cd https://argoproj.github.io/argo-helm
       args:
@@ -58,15 +51,33 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       tags: argocd
 
-    - name: Update helm repos (argo-cd)
-      shell: helm repo update
+    - name: Update argo-cd chart dependencies
+      shell: helm dep update charts/argo-cd/
+      args:
+        chdir: "{{ playbook_dir }}/.."
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       tags: argocd
 
-    - name: Install argo-cd
-      shell: |
-        helm upgrade --install argocd argo-cd/argo-cd -n argocd --create-namespace -f ../helm/argocd-values.yaml
+    - name: Install argo-cd from local chart
+      shell: helm upgrade --install argocd charts/argo-cd/ -n argocd --create-namespace -f charts/argo-cd/values.yaml
+      args:
+        chdir: "{{ playbook_dir }}/.."
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      tags: argocd
+
+    - name: Template ArgoCD ingress.yaml from j2
+      template:
+        src: ../charts/argo-cd/ingress.yaml.j2
+        dest: ../charts/argo-cd/ingress.yaml
+        mode: 0644
+      tags: argocd
+
+    - name: Apply ArgoCD ingress manifest
+      shell: kubectl apply -f charts/argo-cd/ingress.yaml
+      args:
+        chdir: "{{ playbook_dir }}/.."
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       tags: argocd

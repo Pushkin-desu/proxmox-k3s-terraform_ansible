@@ -340,6 +340,35 @@ kubectl get pods -A
 
 ---
 ## Шаг 7. Установка Ingress Nginx и ArgoCD
+# Для автоматической установки добавьте в .env ваши переменные:
+
+Адрес обратного прокси, стоящего перед кластером, если такого нет, переменную объявлять не нужно
+```bash
+export PROXY_REAL_IP_CIDR="192.168.1.1/32"
+```
+
+Доменное имя для ArgoCD
+```bash
+export ARGOCD_DOMAIN="argocd.domain.local"
+```
+Полный путь к файлу kubeconfig-master.yaml
+
+```bash
+export KUBECONFIG="/opt/proxmox-k3s-terraform_ansible/kubeconfig-master.yaml"
+```
+
+Повторите экспорт переменных
+
+```bash
+source .env
+```
+
+Далее запустите плейбук 
+```bash
+ansible-playbook -i ansible/hosts ansible/install-apps.yml
+```
+
+# Для ручной установки
 Проверьте что выполнили
 ```bash
 export KUBECONFIG=./kubeconfig-master.yaml
@@ -367,7 +396,7 @@ helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx -n ingress-ngin
 
 4. Установка ArgoCD
 
-Замените argocd.domain.local на ваше доменное имя в файлах argocd-ingress.yaml и argocd-values.yaml
+Замените argocd.domain.local на ваше доменное имя в файле argocd-ingress.yaml
 ```bash
 helm repo add argo-cd https://argoproj.github.io/argo-helm
 
