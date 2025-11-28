@@ -1,0 +1,94 @@
+---
+# ansible/install-apps.yml
+# Автоматизация установки Helm, kubectl, ingress-nginx и ArgoCD на master-ноду K3s
+
+- hosts: masters
+  become: yes
+  vars:
+    kubectl_version: v1.29.3 # можно вынести в group_vars
+    proxy_real_ip_cidr: "192.168.17.8/32"  # по умолчанию, можно переопределить
+    argocd_domain: "argocd.domain.local"    # по умолчанию, можно переопределить
+  tasks:
+    - name: Ensure apt cache is updated
+      apt:
+        update_cache: yes
+
+    - name: Install Helm
+      apt:
+        name: helm
+        state: present
+      tags: helm
+
+    - name: Download kubectl
+      get_url:
+        url: "https://dl.k8s.io/release/{{ kubectl_version }}/bin/linux/amd64/kubectl"
+        dest: /usr/local/bin/kubectl
+        mode: '0755'
+      tags: kubectl
+
+    - name: Add ingress-nginx repo
+      shell: helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+      args:
+        creates: /root/.cache/helm/repository/ingress-nginx-index.yaml
+      tags: ingress
+
+    - name: Update helm repos
+      shell: helm repo update
+      tags: ingress
+
+    - name: Create ingress-nginx namespace
+      shell: kubectl create namespace ingress-nginx || true
+      tags: ingress
+
+    - name: Install ingress-nginx
+      shell: |
+        helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+          -n ingress-nginx \
+          --set controller.ingressClassResource.name=nginx \
+          --set controller.ingressClass=nginx \
+          --set controller.service.type=NodePort \
+          --set controller.service.enableHttp=true \
+          --set controller.service.enableHttps=false \
+          --set controller.service.nodePorts.http=30080 \
+          --set controller.config.use-forwarded-headers="true" \
+          --set-string controller.config.proxy-real-ip-cidr="{{ proxy_real_ip_cidr }}"
+      tags: ingress
+
+    - name: Add argo-cd repo
+      shell: helm repo add argo-cd https://argoproj.github.io/argo-helm
+      args:
+        creates: /root/.cache/helm/repository/argo-cd-index.yaml
+      tags: argocd
+
+    - name: Update helm repos (argo-cd)
+      shell: helm repo update
+      tags: argocd
+
+    - name: Install argo-cd
+      shell: |
+        helm upgrade --install argocd argo-cd/argo-cd -n argocd --create-namespace
+      tags: argocd
+
+    - name: Template ArgoCD ingress
+      template:
+        src: argocd-ingress.yaml.j2
+        dest: /root/charts/argo-cd/argocd-ingress.yaml
+      tags: argocd
+
+    - name: Apply ArgoCD ingress
+      shell: kubectl apply -f /root/charts/argo-cd/argocd-ingress.yaml
+      args:
+        warn: false
+      ignore_errors: yes
+      tags: argocd
+
+    - name: Print ArgoCD admin password
+      shell: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+      register: argocd_admin_pass
+      changed_when: false
+      tags: argocd
+
+    - name: Show ArgoCD admin password
+      debug:
+        msg: "ArgoCD admin password: {{ argocd_admin_pass.stdout }}"
+      tags: argocd

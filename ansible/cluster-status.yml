@@ -44,7 +44,7 @@
         label: "{{ item.name }}"
       register: statuses
 
-    - name: Show statuses
+    - name: Report
       debug:
         msg: |
           Всего {{ statuses.results|length }} машин.
