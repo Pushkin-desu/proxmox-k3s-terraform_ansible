@@ -224,3 +224,27 @@
         name: k3s-agent
         state: started
         enabled: true
+
+- name: Build list of worker node hostnames
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Collect worker node hostnames from host_vars
+      set_fact:
+        worker_node_names: "{{ worker_node_names | default([]) + [hostvars[item].name | default(item)] }}"
+      loop: "{{ groups['k3s_workers'] }}"
+
+    - name: Wait for all worker nodes to appear in Kubernetes
+      shell: |
+        kubectl --kubeconfig ../kubeconfig-master.yaml get nodes {{ item }}
+      register: node_check
+      retries: 30
+      delay: 5
+      until: node_check.rc == 0
+      loop: "{{ worker_node_names }}"
+      ignore_errors: false
+
+    - name: Label all worker nodes in Kubernetes
+      shell: |
+        kubectl --kubeconfig ../kubeconfig-master.yaml label node {{ item }} node-role.kubernetes.io/worker=true --overwrite
+      loop: "{{ worker_node_names }}"

@@ -1,0 +1,7 @@
+mirrors:
+  "{{ lookup('env', 'REGISTRY_DOMAIN') }}":
+    endpoint:
+      - "http://{{ lookup('env', 'REGISTRY_DOMAIN') }}:5000"
+  "{{ lookup('env', 'REGISTRY_DOMAIN') }}:5000":
+    endpoint:
+      - "http://{{ lookup('env', 'REGISTRY_DOMAIN') }}:5000"

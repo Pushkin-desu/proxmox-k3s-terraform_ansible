@@ -415,6 +415,33 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.pas
 6. Скопируйте полученный пароль и откройте в браузере указанную ранее ссылку, для входа используйте admin и полученный пароль. Позже сменим на свой.
 ---
 
+## Дополнение
+
+Для установки локального Registry, вы можете воспользоваться playbook`ом configure-registry.yaml
+
+1. Добавьте в .env две новых переменных
+```bash
+export REGISTRY_DOMAIN="registry.domain.name"
+export REGISTRY_STORAGE_SIZE="10Gi"
+```
+
+2. Введите в консоли
+```bash
+source .env
+```
+
+3. Установите Registry
+```bash
+ansible-playbook -i ansible/hosts ansible/configure-registry.yaml
+```
+
+4. Проверка работы
+```bash
+docker pull busybox
+docker tag busybox registry.domain.name/busybox:test
+docker push registry.domain.name/busybox:test
+```
+
 ## FAQ и типичные ошибки
 
 - **Terraform не может клонировать шаблон:** Проверьте, что VM-шаблон (9000) есть на целевом узле и storage (см. “Как создать cloud-init образ”).

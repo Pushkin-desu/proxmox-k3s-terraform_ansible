@@ -1,0 +1,63 @@
+---
+- name: Deploy registry resources
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Template registry namespace
+      template:
+        src: ../registry/namespace.yaml
+        dest: ../registry/namespace.yaml
+
+    - name: Template registry pvc
+      template:
+        src: ../registry/pvc.yaml.j2
+        dest: ../registry/pvc.yaml
+
+    - name: Template registry deployment
+      template:
+        src: ../registry/deployment.yaml
+        dest: ../registry/deployment.yaml
+
+    - name: Template registry service
+      template:
+        src: ../registry/service.yaml
+        dest: ../registry/service.yaml
+
+    - name: Template registry ingress
+      template:
+        src: ../registry/ingress.yaml.j2
+        dest: ../registry/ingress.yaml
+
+    - name: Apply registry
+      shell: kubectl apply -k ../registry/
+
+- name: Configure registry on k3s cluster
+  hosts: k3s_masters:k3s_workers
+  become: yes
+  tasks:
+    - name: Ensure /etc/rancher/k3s exists
+      file:
+        path: /etc/rancher/k3s
+        state: directory
+        owner: root
+        group: root
+        mode: 0755
+    - name: Create registries.yaml
+      template:
+        src: templates/registries.yaml.j2
+        dest: /etc/rancher/k3s/registries.yaml
+        owner: root
+        group: root
+        mode: 0644
+
+    - name: Restart k3s
+      systemd:
+        name: k3s
+        state: restarted
+      when: inventory_hostname in groups['k3s_masters']
+
+    - name: Restart k3s-agent
+      systemd:
+        name: k3s-agent
+        state: restarted
+      when: inventory_hostname in groups['k3s_workers']
